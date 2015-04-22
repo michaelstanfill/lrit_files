@@ -1,0 +1,10 @@
+{
+  "name":"LRIT Files DAEMON",
+  "version":"0.1",
+  "files":{
+    "214":{
+      "directory":"/usr/apps/lrit_files/data/emwin",
+      "error_tolerance":"log"
+    }
+  }
+}

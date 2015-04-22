@@ -1,0 +1,140 @@
+#!/usr/local/bin/python
+
+import os, re, reedsolo, socket, struct, sys
+
+class LRIT:
+
+  frame_sync = b'\x1a\xcf\xfc\x1d'
+
+  class frame:
+    def __init__( self, buffer ):
+      size = len( buffer )
+      if size != 1024:
+        raise ValueError( "CADU frame is %d bytes instead of 1024" % ( size ) )
+
+      # Decode VCDU primary header
+
+      ( vcdu1, vcdu2 ) = struct.unpack( "!hl", buffer[4:10] )
+      self.version    = ( vcdu1 & 0xc000 ) >> 14
+      self.spacecraft = ( vcdu1 & 0x3fc0 ) >> 6
+      self.channel    =   vcdu1 & 0x003f
+
+      self.counter    = ( vcdu2 & 0xffffff00 ) >> 8
+      self.replay     = ( vcdu2 & 0x00000080 ) >> 7
+      self.spare      =   vcdu2 & 0x0000007f
+
+      # Decode M_PDU header
+
+      self.first_header_ptr = struct.unpack( '!h', buffer[10:12] )[0] & 0x07ff 
+      self.packet_zone = buffer[12:]
+
+  class transport_file:
+    def __init__( self, data ):
+      print "Data length = %d" % ( len( data ) )
+      ( self.file_counter, self.length ) = struct.unpack( "!hQ", data[0:10] )
+      self.data = data[10:]
+      self.is_file_complete()
+
+    def append( self, data ):
+      self.data += data
+      self.is_file_complete()
+
+    def is_file_complete( self ):
+      if self.length == len( self.data ):
+        print "Output file: %s" % ( self.data )
+
+  class packet:
+    def __init__( self, data ):
+      self.version = None
+      self.buffer = b''
+      datalen = len( data )
+      if datalen > 5:
+	self.decode_header( data )
+	if self.length + 6 >= datalen:
+	  self.finalize( data[:self.length+6] )
+      else:
+	self.buffer = data
+
+    def decode_header( self, header ):
+      ( id, seq, len ) = struct.unpack( "!hhh", header[0:6] )
+      self.version        = ( id & 0xe000 ) >> 13
+      self.type           = ( id & 0x1000 ) >> 12
+      self.secondary_flag = ( id & 0x0800 ) >> 11
+      self.apid           =   id & 0x07ff
+      self.seq_flag       = ( seq & 0xc000 ) >> 14
+      self.seq_ctr        =   seq & 0x3fff
+      self.length         =   len
+
+    def finalize( self, data ):
+      self.buffer += data
+      if self.version is None: self.decode_header( data )
+      self.data = self.buffer[6:]
+      self.buffer = b''
+
+  class channel:
+    def __init__( self ):
+      self.packet = None
+      self.apids = {}
+
+    def new_packet( self, data ):
+      self.packet = LRIT.packet( data )
+      self.assign_packet()
+
+    def finalize_packet( self, data ):
+      if self.packet is None:
+        return None
+      self.packet.finalize( data )
+      self.assign_packet()
+      self.packet = None
+
+    def assign_packet( self ):
+      if self.packet.version is None: return None
+      apid = self.packet.apid
+      payload = self.packet.buffer[:-2]
+      print "APID = %d" % ( apid )
+      if apid in self.apids:
+        self.apid[apid].append( payload )
+      else:
+        self.apid[apid] = LRIT.transport_file( payload )
+
+
+  def __init__( self, host, port = 4001 ):
+    self.sock = socket.socket( socket.AF_INET, socket.SOCK_STREAM )
+    self.sock.connect( ( host, port ) )
+    self.buffer = None
+
+  def __iter__( self ):
+    return self
+
+  def next( self ):
+    if self.buffer is None:
+      while True:
+        chunk = bytearray( self.sock.recv( 1024 ) )
+        i = chunk.find( LRIT.frame_sync )
+        if i != -1:
+          self.buffer = chunk[i+4:]
+          break
+    while True:
+      i = self.buffer.find( LRIT.frame_sync )
+      if i != -1:
+        frame = LRIT.frame( LRIT.frame_sync + self.buffer[:i] )
+        self.buffer = self.buffer[i+4:]
+        return frame
+      chunk = self.sock.recv( 1024 )
+      self.buffer += chunk
+
+if __name__ == '__main__':
+
+  channel = []
+  for chan in range( 64 ):
+    channel.append( LRIT.channel() )
+  
+  for frame in LRIT( '137.161.185.231' ):
+    chan = channel[frame.channel]
+    fhp = frame.first_header_ptr
+    print "First Header Pointer: %4d" % ( fhp )
+    if fhp != 0:
+      chan.finalize_packet( frame.packet_zone[:fhp] )
+    chan.new_packet( frame.packet_zone[fhp:] )
+
+    #print frame.encode( 'hex' )

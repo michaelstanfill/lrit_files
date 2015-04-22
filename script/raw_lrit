@@ -1,0 +1,13 @@
+#!/usr/local/bin/python
+
+import os, socket, sys
+
+output = file( 'rawdata.lrit', 'w' )
+sock = socket.socket( socket.AF_INET, socket.SOCK_STREAM )
+sock.connect( ( '137.161.185.231', 4001 ) )
+
+for x in range( 0, 1000 ):
+  chunk = bytearray( sock.recv( 1024 ) )
+  sys.stdout.write( '.' )
+  output.write( chunk )
+print

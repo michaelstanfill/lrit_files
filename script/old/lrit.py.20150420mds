@@ -1,0 +1,207 @@
+#!/usr/local/bin/python
+
+import os, re, socket, struct, sys
+
+from hexdump import hexdump
+
+from rs import reedsolomon
+
+class LRIT:
+
+  frame_sync = b'\x1a\xcf\xfc\x1d'
+
+  def __init__( self, host, port=4001, file=None ):
+    if file is not None:
+      self.mode = 'file'
+      self.fd = open( file, 'rb' )
+    else:
+      self.mode = 'sock'
+      self.sock = socket.socket( socket.AF_INET, socket.SOCK_STREAM )
+      self.sock.connect( ( host, port ) )
+    self.buffer = None
+
+  def __iter__( self ):
+    return self
+
+  def next( self ):
+    if self.buffer is None:
+      while True:
+        if self.mode == 'file':
+          chunk = bytearray( self.fd.read( 1024 ) )
+        else:
+          chunk = bytearray( self.sock.recv( 1024 ) )
+        i = chunk.find( LRIT.frame_sync )
+        if i != -1:
+          self.buffer = chunk[i+4:]
+          break
+    while True:
+      i = self.buffer.find( LRIT.frame_sync )
+      if i != -1:
+        while i < 1020: i += self.buffer.find( LRIT.frame_sync, i )
+        frame = LRIT.frame( LRIT.frame_sync + self.buffer[:i] )
+        self.buffer = self.buffer[i+4:]
+        return frame
+      if self.mode == 'file':
+        chunk = bytearray( self.fd.read( 1024 ) )
+      else:
+        chunk = bytearray( self.sock.recv( 1024 ) )
+      self.buffer += chunk
+
+  #############################################################################
+
+  class frame:
+    def __init__( self, buffer ):
+      size = len( buffer )
+      if size != 1024:
+        hexdump( str( buffer ) )
+        raise UserWarning( "CADU frame is %d bytes instead of 1024" % ( size ) )
+      buffer = bytearray( buffer )
+      if rs.decode( buffer ) == False:
+        print color( "%d errors/frame\n%d uncorrectable errors/frame" %
+                     ( rs.num_errors_per_frame, rs.uncor_errs_per_frame ),
+                     'red' )
+      buffer = str( buffer )
+
+      # Decode VCDU primary header
+
+      ( vcdu1, vcdu2 ) = struct.unpack( "!HL", buffer[4:10] )
+      self.version    = ( vcdu1 & 0xc000 ) >> 14
+      self.spacecraft = ( vcdu1 & 0x3fc0 ) >> 6
+      self.channel    =   vcdu1 & 0x003f
+
+      self.counter    = ( vcdu2 & 0xffffff00 ) >> 8
+      self.replay     = ( vcdu2 & 0x00000080 ) >> 7
+      self.spare      =   vcdu2 & 0x0000007f
+
+      # Decode M_PDU header
+
+      self.first_header_ptr = struct.unpack( '!H', buffer[10:12] )[0] & 0x07ff 
+      self.packet_zone = buffer[12:]
+
+      if self.channel != 63:
+        msg = """CADU Frame:
+ Version: %3d      Counter: %8d
+   Craft: %3d       Replay: %8d
+ Channel: %3d  1st Hdr Ptr: %8d""" % ( self.version, self.counter,
+          self.spacecraft, self.replay, self.channel, self.first_header_ptr )
+        print color( msg, 'green' )
+      else:
+        print color( "Channel 63 padding", 'white' )
+
+  #############################################################################
+
+  class transport_file:
+    def __init__( self, packet ):
+      self.data = b''
+      self.decode_packet( packet )
+
+    def decode_packet( self, packet ):
+      if packet.seq_first and len( packet.data ) >= 10:
+        ( self.file_counter, self.length ) = struct.unpack( "!HQ",
+                                                            packet.data[0:10] )
+        self.data = packet.data[10:]
+      else:
+        self.data += packet.data
+
+      if packet.seq_last and len( self.data ) >= 16:
+        ( header_type, record_len, file_type, header_len,
+          bitlength ) = struct.unpack( '!BHBLQ', self.data[:16] )
+        if header_type != 0:
+          print color( "Primary Header Record type is %d, not 0!" %
+                       ( header_type ), 'yellow' )
+        if record_len != 16:
+          print color( "Primary Header Record length is %d, not 16!" %
+                       ( record_len ), 'yellow' )
+        self.file_type = file_type
+        print "File Type %d" % ( file_type )
+        print "Secondary Headers:"
+        hexdump( str( self.data[16:16 + header_len - record_len] ) )
+        print "Output file:"
+        hexdump( str( self.data[16 + header_len - record_len:] ) )
+        
+  #############################################################################
+
+  class packet:
+    def __init__( self, data ):
+      self.version = None
+      data_len = len( data )
+      if data_len < 6:                   # too short to be complete, abort
+        return
+      ( id, seq, length ) = struct.unpack( "!HHH", data[0:6] )
+      length += 1                        # length = octets in data *minus one*
+      self.version        = ( id & 0xe000 ) >> 13
+      self.type           = ( id & 0x1000 ) >> 12
+      self.secondary_flag = ( id & 0x0800 ) >> 11
+      self.apid           =   id & 0x07ff
+      self.seq_first      = ( seq & 0x8000 ) >> 15
+      self.seq_last       = ( seq & 0x4000 ) >> 14
+      self.seq_ctr        =   seq & 0x3fff
+      self.length         =   length
+      if length + 6 > data_len:          # incomplete packet, abort
+        self.version = None
+        return
+      self.data = data[6:length+4]       # trim off header and CRC
+      msg = """CP_PDU Packet:
+     Version: %4d   First?: %5d
+        Type: %4d    Last?: %5d
+ 2ndary Flag: %4d  Counter: %5d
+        APID: %4d   Length: %5d""" % ( self.version, self.seq_first,
+        self.type, self.seq_last, self.secondary_flag, self.seq_ctr,
+        self.apid, self.length )
+      print color( msg, 'blue' )
+
+  #############################################################################
+
+  class channel:
+    def __init__( self ):
+      self.buffer = b''
+      self.apids = {}
+
+    def add_frame( self, data ):
+      self.buffer += data
+      pack = LRIT.packet( self.buffer )
+      while pack.version is not None:
+        apid = pack.apid
+        if apid == 2047:
+          pass 
+        elif apid in self.apids:
+          self.apids[apid].decode_packet( pack )
+        else:
+          self.apids[apid] = LRIT.transport_file( pack )
+        self.buffer = self.buffer[pack.length+6:]
+        pack = LRIT.packet( self.buffer )
+
+###############################################################################
+
+color_map = {   'black': '\33[40m\33[97m',
+                 'blue': '\33[44m\33[97m',
+                 'cyan': '\33[46m\33[97m',
+                'green': '\33[42m\33[97m',
+              'magenta': '\33[45m\33[97m',
+                  'red': '\33[41m\33[97m',
+                'white': '\33[47m\33[30m',
+               'yellow': '\33[43m\33[30m' }
+
+def color( text, color ):
+  return '%s%s\33[39m\33[49m' % ( color_map[color], text )
+
+if __name__ == '__main__':
+  filename = None
+  if len( sys.argv ) > 1:
+    filename = sys.argv[1]
+    print "Reading satellite data from file: ", filename
+  channel = []
+  for chan in range( 64 ):
+    channel.append( LRIT.channel() )
+
+  rs = reedsolomon( 8, 16, 112, 11, 0, 4, 0, 1 )
+  
+  for frame in LRIT( '137.161.185.231', file=filename ):
+    chan = channel[frame.channel]
+    fhp = frame.first_header_ptr
+    if fhp == 2047:
+      chan.add_frame( frame.packet_zone )
+      continue
+    elif fhp != 0:
+      chan.add_frame( frame.packet_zone[:fhp] )
+    chan.add_frame( frame.packet_zone[fhp:] )

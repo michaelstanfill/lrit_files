@@ -1,0 +1,169 @@
+#!/usr/local/bin/python
+
+import os, re, rs, socket, struct, sys
+
+def bin( buf ):
+  s = ''
+  t = { '0': '0000', '1': '0001', '2': '0010', '3': '0011',
+        '4': '0100', '5': '0101', '6': '0110', '7': '0111',
+        '8': '1000', '9': '1001', 'a': '1010', 'b': '1011',
+        'c': '1100', 'd': '1101', 'e': '1110', 'f': '1111' }
+  for a in buf:
+    for c in hex( ord( a ) )[2:]:
+      s += t[c] + " "
+  return s
+
+def hexstr( buf ):
+  s = ''
+  ct = 0
+  for a in buf:
+    if type(a) == type('a'):
+      b = ord( a )
+    else:
+      b = a
+    for c in '%02x' % ( b ):
+      s += c
+      ct += 1
+      if not ct % 64:
+        s += "\n"
+      elif not ct % 8:
+        s += ' ';
+  return s
+
+def rs_fix( data ):
+  data = data[4:]
+  def unterleave (intLev):
+    output = []
+    for i in xrange(intLev,len(data),4): output.append(data[i])
+    return output
+  rsc = rs.RSCoder(255,223)
+  print "DATA = "
+  print hexstr( data )
+  for il in xrange( 4 ):
+    #print "Data from %d to %d:" % ( 4 + il * 223, 228 + il * 223 )
+    #d = data[4+il*223:4+il*223+223]
+    d = unterleave(il)
+    print "Unterleved data"
+    print hexstr( d )
+    #print "Parity from %d to %d:" % ( 896 + il * 32, 928 + il * 32 )
+    p = d[223:]
+    print "Encoded string would be:"
+    temp = d[:223]
+    print hexstr(rsc.encode( "".join(map(chr, temp)) ) )
+    print "Parity:"
+    print hexstr( p )
+    raw = "".join(map(chr, d) )
+    fixed = rsc.decode( str( raw ) )
+    if raw != fixed:
+      print "Fixed error!"
+
+class LRIT:
+
+  frame_sync = b'\x1a\xcf\xfc\x1d'
+
+  class frame:
+    def __init__( self, data ):
+      size = len( data )
+      if size != 1024:
+        raise ValueError( "CADU frame is %d bytes instead of 1024" % ( size ) )
+
+      # Check / correct with Reed-Solomon code
+
+      rs_fix( data )
+
+      # Decode VCDU primary header
+
+      ( vcdu1, vcdu2 ) = struct.unpack( "!hl", data[4:10] )
+      self.version    = ( vcdu1 & 0xc000 ) >> 14
+      self.spacecraft = ( vcdu1 & 0x3fc0 ) >> 6
+      self.channel    =   vcdu1 & 0x003f
+
+      self.counter    = ( vcdu2 & 0xffffff00 ) >> 8
+      self.replay     = ( vcdu2 & 0x00000080 ) >> 7
+      self.spare      =   vcdu2 & 0x0000007f
+
+      # Decode M_PDU header
+
+      self.first_header_ptr = struct.unpack( '!h', data[10:12] )[0] & 0x07ff
+      self.packet_zone = data[12:]
+
+  class packet:
+    def __init__( self, data ):
+      self.version = None
+      self.buffer = b''
+      datalen = len( data )
+      if datalen > 5:
+	self.decode_header( data )
+	if self.length + 6 >= datalen:
+	  self.finalize( data[:self.length+6] )
+      else:
+	self.buffer = data
+
+    def decode_header( self, header ):
+      ( id, seq, len ) = struct.unpack( "!hhh", header[0:6] )
+      self.version        = ( id & 0xe000 ) >> 13
+      self.type           = ( id & 0x1000 ) >> 12
+      self.secondary_flag = ( id & 0x0800 ) >> 11
+      self.apid           =   id & 0x07ff
+      self.seq_flag       = ( seq & 0xc000 ) >> 14
+      self.seq_ctr        =   seq & 0x3fff
+      self.length         =   len
+
+    def finalize( self, data ):
+      self.buffer += data
+      if self.version is None: self.decode_header( data )
+      self.data = self.buffer[6:]
+      self.buffer = b''
+
+  class channel:
+    def __init__( self ):
+      self.packet = None
+      self.packets = []
+
+    def new_packet( self, data ):
+      self.packet = LRIT.packet( data )
+
+    def finalize_packet( self, data ):
+      if self.packet is not None:
+        self.packet.finalize( data )
+
+  def __init__( self, host, port = 4001 ):
+    self.sock = socket.socket( socket.AF_INET, socket.SOCK_STREAM )
+    self.sock.connect( ( host, port ) )
+    self.buffer = None
+
+  def __iter__( self ):
+    return self
+
+  def next( self ):
+    if self.buffer is None:
+      while True:
+        chunk = bytearray( self.sock.recv( 1024 ) )
+        i = chunk.find( LRIT.frame_sync )
+        if i != -1:
+          self.buffer = chunk[i+4:]
+          break
+    while True:
+      i = self.buffer.find( LRIT.frame_sync )
+      if i != -1:
+        frame = LRIT.frame( LRIT.frame_sync + self.buffer[:i] )
+        self.buffer = self.buffer[i+4:]
+        return frame
+      chunk = self.sock.recv( 1024 )
+      self.buffer += chunk
+
+if __name__ == '__main__':
+
+  channel = []
+  for chan in range( 64 ):
+    channel.append( LRIT.channel() )
+
+  for frame in LRIT( '137.161.185.231' ):
+    chan = channel[frame.channel]
+    fhp = frame.first_header_ptr
+    print "First Header Pointer: %4d" % ( fhp )
+    if fhp != 0:
+      chan.finalize_packet( frame.packet_zone[:fhp] )
+    chan.new_packet( frame.packet_zone[fhp:] )
+
+    #print frame.encode( 'hex' )

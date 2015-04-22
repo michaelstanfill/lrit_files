@@ -1,0 +1,72 @@
+#!/usr/local/bin/python
+
+import os, re, socket, struct, sys
+    
+class LRIT:
+
+  class frame:
+    def __init__( self, data ):
+      self.data = data
+      size = len( data )
+      if size != 1024:
+        raise ValueError( "CADU frame is %d bytes instead of 1024" % ( size ) )
+
+      # Decode VCDU primary header
+
+      ( vcdu1, vcdu2 ) = struct.unpack( "!hl", data[4:10] )
+      self.version    = ( vcdu1 & 0xc000 ) >> 14
+      self.spacecraft = ( vcdu1 & 0x3fc0 ) >> 6
+      self.channel    =   vcdu1 & 0x003f
+
+      self.counter    = ( vcdu2 & 0xffffff00 ) >> 8
+      self.replay     = ( vcdu2 & 0x00000080 ) >> 7
+      self.spare      =   vcdu2 & 0x0000007f
+
+      # Decode M_PDU header
+
+      self.fhp = struct.unpack( '!h', data[10:12] )[0] & 0x07ff 
+
+  frame_sync = '\x1a\xcf\xfc\x1d'
+
+  def __init__( self, host, port = 4001 ):
+    self.sock = socket.socket( socket.AF_INET, socket.SOCK_STREAM )
+    self.sock.connect( ( host, port ) )
+    self.buffer = None
+
+  def __iter__( self ):
+    return self
+
+  def next( self ):
+    if self.buffer is None:
+      while True:
+        chunk = self.sock.recv( 1024 )
+        i = chunk.find( LRIT.frame_sync )
+        if i != -1:
+          self.buffer = chunk[i+4:]
+          break
+    while True:
+      i = self.buffer.find( LRIT.frame_sync )
+      if i != -1:
+        frame = LRIT.frame( LRIT.frame_sync + self.buffer[:i] )
+        self.buffer = self.buffer[i+4:]
+        return frame
+      chunk = self.sock.recv( 1024 )
+      self.buffer += chunk
+
+def bin( a ):
+  s = ''
+  t = { '0': '0000', '1': '0001', '2': '0010', '3': '0011',
+        '4': '0100', '5': '0101', '6': '0110', '7': '0111',
+        '8': '1000', '9': '1001', 'a': '1010', 'b': '1011',
+        'c': '1100', 'd': '1101', 'e': '1110', 'f': '1111' }
+  for c in hex( a )[2:]:
+    s += t[c] + " "
+  return s
+
+if __name__ == '__main__':
+  
+  for frame in LRIT( '137.161.185.231' ):
+
+    print "First Header Pointer: %4d" % ( frame.fhp )
+
+    #print frame.encode( 'hex' )

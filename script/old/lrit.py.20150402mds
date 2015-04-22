@@ -1,0 +1,41 @@
+#!/usr/local/bin/python
+import sys,os,socket,reedsolo,struct
+
+buffer = ""
+packet_len = 1024
+frame_sync = '\x1a\xcf\xfc\x1d'
+
+channels = []
+
+class channel:
+  def __init__( self ):
+    self.data = ""
+
+  def addFrame( self, buf ):
+    frame_num = chr( 0x00 ) + buf[2:5]
+    print "frame # (vcdu counter)"+ str( struct.unpack( "l",frame_num )[0] )
+    print struct.unpack("!H",buf[6:8])[0]
+    self.data += buf[8:]
+
+## initialize channels:
+for i in xrange( 63 ):
+  channels.append( channel() )
+
+s = socket.socket( socket.AF_INET, socket.SOCK_STREAM )
+s.connect( ( '137.161.185.231', 4001 ) )
+
+sync_flag = False
+while 1 == 1:
+  chunk = s.recv( 1024 )
+  if chunk != '':
+    buffer = buffer + chunk
+  if frame_sync in buffer:
+    i = buffer.index( frame_sync )
+    frame = buffer[:i]
+    buffer = buffer[i+4:]
+    if sync_flag == False:
+      sync_flag = True
+    elif len (frame) > 4:
+      chan = ord(frame[1])& 0x3f
+      print "channel:" + str( chan )
+      if chan != 63: channels[chan].addFrame( frame )
