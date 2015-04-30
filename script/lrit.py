@@ -1,6 +1,6 @@
 #!/usr/local/bin/python
 
-import os, re, socket, struct, sys
+import json, os, re, socket, struct, sys
 
 from hexdump import hexdump
 
@@ -48,7 +48,6 @@ def crc( data ):
 class LRIT:
 
   frame_sync = b'\x1a\xcf\xfc\x1d'
-  verbose = True
 
   def __init__( self, host, port=4001, file=None ):
     if file is not None:
@@ -93,7 +92,7 @@ class LRIT:
       inc = self.buffer.find( LRIT.frame_sync, i + 4 )
       if inc == -1:
         return -1
-      if LRIT.verbose:
+      if cfg( 'verbose' ):
         print color( 'cyan', "i = %d, inc = %d\n%s" % ( i, inc,
                              hexdump( str( self.buffer ), result='return' ) ) )
       i = inc
@@ -135,30 +134,32 @@ class LRIT:
       self.first_header_ptr = struct.unpack( '!H', buffer[10:12] )[0] & 0x07ff 
       self.packet_zone = buffer[12:]
 
-      if LRIT.verbose:
-        #if self.channel != 63:
-        if self.channel == 0:
-          msg = """CADU Frame:
- Version: %3d      Counter: %8d
-   Craft: %3d       Replay: %8d
- Channel: %3d  1st Hdr Ptr: %8d (0x%x)
-%s""" % ( self.version, self.counter,
-          self.spacecraft, self.replay, self.channel, self.first_header_ptr,
-          self.first_header_ptr, hexdump( str( buffer ), result='return' ) )
-          print color( 'green', msg )
-        #else:
-          #print color( 'white', "Channel 63 padding" )
+      if( cfg( 'verbose', 'tuned_frame' ) and tuning( self.channel ) ):
+        msg = """CADU Frame:
+ Version: %3d  Channel: %8d     FHP: %8d (0x%x)
+   Craft: %3d  Counter: %8d  Replay: %8d""" % ( self.version, self.channel,
+          self.first_header_ptr, self.first_header_ptr, self.spacecraft,
+          self.counter, self.replay )
+        print color( 'green', msg )
+        print color( 'green', hexdump( str( buffer ), result='return' ) )
+      elif tuning( self.channel ):
+        print color( 'green', "Ch %d frame" % ( self.channel ) )
+      else:
+        print color( 'white', "Ch %d frame" % ( self.channel ) )
 
   #############################################################################
 
   class transport_file:
-    def __init__( self, packet ):
+    def __init__( self, channel, packet ):
       self.data = bytearray()
+      self.channel = channel
       self.length = None
       self.decode_packet( packet )
 
     def decode_packet( self, packet ):
       if len( self.data ) == 0 and not packet.seq_first:
+        print color( 'blue', 'Ch %d, APID %d: No first packet yet' %
+                             ( self.channel, packet.apid ) )
         return
 
       self.data += packet.data
@@ -175,16 +176,39 @@ class LRIT:
         if record_len != 16:
           print color( 'yellow', "Primary Header Record length is %d, not 16!"
                                  % ( record_len ) )
+        self.record_len = record_len
         self.file_type = file_type
-        print "File Type %d" % ( file_type )
+        self.header_len = header_len
+        print "Channel %d, file Type %d" % ( self.channel, file_type )
         print "Secondary Headers: %d bytes" % ( header_len - record_len )
         #hexdump( str( self.data[26:26 + header_len - record_len] ) )
         print "Output file: %d bytes" % ( len( self.data ) -
                                           26 - header_len + record_len )
-        hexdump( str( self.data[26 + header_len - record_len:] ) )
+        #hexdump( str( self.data[26 + header_len - record_len:] ) )
+        if cfg( 'channel', str( self.channel ), 'files', str( file_type ) ):
+          dir = cfg( 'channel', str( self.channel ), 'files',
+                     str( file_type ), 'directory' )
+          if dir:
+            if dir[0] != '/': dir = cfg( 'base_directory' ) + "/" + dir
+            self.write_file( dir )
+        elif cfg( 'channel', str( self.channel ), 'file_by_type' ):
+          dir = "%s/%s/%s" % ( cfg( 'base_directory' ), str( self.channel ),
+                               str( file_type ) )
+          self.write_file( dir )
+          
         self.data = bytearray()
         self.length = None
         self.file_type = None
+
+    def write_file( self, dir ):
+      if not os.path.exists( dir ): os.makedirs( dir )
+      filename = "%s/%d" % ( dir, self.file_counter )
+      fd = open( filename + ".head", "w" )
+      fd.write( self.data[10:26 + self.header_len - self.record_len] )
+      fd.close()
+      fd = open( filename, "w" )
+      fd.write( self.data[26 + self.header_len - self.record_len:] )
+      fd.close()
         
   #############################################################################
 
@@ -200,8 +224,8 @@ class LRIT:
       self.type           = ( id & 0x1000 ) >> 12
       self.secondary_flag = ( id & 0x0800 ) >> 11
       self.apid           =   id & 0x07ff
-      self.seq_first      = ( seq & 0x8000 ) >> 15
-      self.seq_last       = ( seq & 0x4000 ) >> 14
+      self.seq_last       = ( seq & 0x8000 ) >> 15
+      self.seq_first      = ( seq & 0x4000 ) >> 14
       self.seq_ctr        =   seq & 0x3fff
       self.length         =   length
       if length + 6 > data_len:            # incomplete packet, abort
@@ -210,30 +234,31 @@ class LRIT:
       self.data = data[6:length+4]         # trim off header and CRC
       self.crc = struct.unpack( "!H", data[length+4:length+6] )[0]
       computed_crc = crc( self.data )
-      if LRIT.verbose:
-        msg = """CP_PDU Packet:
-     Version: %4d    First?: %5d
-        Type: %4d     Last?: %5d
- 2ndary Flag: %4d   Counter: %5d
-        APID: %4d    Length: %5d (0x%x)
-         CRC: %4x  Computed: %5x
-%s""" % ( self.version, self.seq_first,
-          self.type, self.seq_last, self.secondary_flag, self.seq_ctr,
-          self.apid, self.length, self.length, self.crc, computed_crc,
-          hexdump( str( data[0:length+6] ), result='return' ) )
-        print color( 'blue', msg )
+      msg = """CP_PDU Packet:
+   Version: %4d    APID: %5d  Counter: %5d
+      Type: %4d  First?: %5d   Length: %5d (0x%x)
+ 2ary Flag: %4d   Last?  %5d      CRC: %4x v %4x""" % ( self.version,
+        self.apid, self.seq_ctr, self.type, self.seq_first, self.length,
+        self.length, self.secondary_flag, self.seq_last, self.crc,
+        computed_crc )
       if self.apid != 2047 and self.crc != computed_crc:
-        print color( 'red', "CRC: 0x%04x vs. 0x%04x" %
-                            ( self.crc, computed_crc ) )
+        print color( 'red', msg )
+        print color( 'yellow',
+                     hexdump( str( data[0:length+6] ), result='return' ) )
+      elif cfg( 'verbose', 'tuned_packet' ):
+        print color( 'blue', msg )
 
   #############################################################################
 
   class channel:
-    def __init__( self ):
+    def __init__( self, channel ):
       self.buffer = bytearray()
+      self.channel = channel
       self.apids = {}
 
-    def add_frame( self, data ):
+    def add_frame( self, data, first ):
+      if not first and len( self.buffer ) == 0:  # Discard any first partial
+        return                                   # packet: we can't use it
       self.buffer += data
       pack = LRIT.packet( self.buffer )
       while pack.version is not None:
@@ -243,7 +268,7 @@ class LRIT:
         elif apid in self.apids:
           self.apids[apid].decode_packet( pack )
         else:
-          self.apids[apid] = LRIT.transport_file( pack )
+          self.apids[apid] = LRIT.transport_file( self.channel, pack )
         self.buffer = self.buffer[pack.length+6:]
         pack = LRIT.packet( self.buffer )
 
@@ -261,27 +286,43 @@ color_map = {   'black': '\33[40m\33[97m',
 def color( color, text ):
   return '%s%s\33[39m\33[49m' % ( color_map[color], text )
 
+def tuning( channel ):
+  if cfg( 'channel', str( channel ) ):
+    return True
+  return False
+
+# Iteratively burrow down into the configuration looking for a value.
+# Return it if it's there, otherwise return False
+
+def cfg( *indices ):
+  cf = conf
+  for index in indices:
+    if index not in cf:
+      return False
+    cf = cf[index]
+  return cf
+
 if __name__ == '__main__':
+  config = '/usr/apps/lrit_files/script/config.json'
+  conf = json.loads( ''.join( open( config ).readlines() ) )
   filename = None
   if len( sys.argv ) > 1:
     filename = sys.argv[1]
     print "Reading satellite data from file: ", filename
   channel = []
   for chan in range( 64 ):
-    channel.append( LRIT.channel() )
+    channel.append( LRIT.channel( chan ) )
 
   rs = reedsolomon( 8, 16, 112, 11, 0, 4, 0, 1 )
   
   for frame in LRIT( '137.161.185.231', file=filename ):
-    if frame.channel != 0:
-      continue
-    if frame.channel == 63:
+    if not tuning( frame.channel ):
       continue
     chan = channel[frame.channel]
     fhp = frame.first_header_ptr
     if fhp == 2047:
-      chan.add_frame( frame.packet_zone )
+      chan.add_frame( frame.packet_zone, first=False )
       continue
     elif fhp != 0:
-      chan.add_frame( frame.packet_zone[:fhp] )
-    chan.add_frame( frame.packet_zone[fhp:] )
+      chan.add_frame( frame.packet_zone[:fhp], first=False )
+    chan.add_frame( frame.packet_zone[fhp:], first=True  )

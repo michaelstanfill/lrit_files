@@ -1,10 +1,32 @@
 {
   "name":"LRIT Files DAEMON",
   "version":"0.1",
-  "files":{
-    "214":{
-      "directory":"/usr/apps/lrit_files/data/emwin",
-      "error_tolerance":"log"
-    }
+  "verbose": {
+    "tuned_frame":0,
+    "tuned_packet":0
+  },
+  "base_directory":"/usr/apps/lrit_files/data",
+  "channel":{
+    "0":{
+      "files":{
+        "214":{
+          "directory":"emwin",
+          "error_tolerance":"log"
+          "write_headers":0
+        }
+      }
+    },
+    "spam1":{
+      "files":{
+        "130":{
+          "directory":"dcs"
+        }
+      }
+    },
+    "13":{ "file_by_type":1 },
+    "spam23":{ "file_by_type":1 },
+    "spam33":{ "file_by_type":1 },
+    "spam41":{ "file_by_type":1 },
+    "spam43":{ "file_by_type":1 }
   }
 }
