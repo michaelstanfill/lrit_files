@@ -14,8 +14,8 @@ Scapy
 00 11 22 33 44 55 66 77 88 99 AA BB CC DD EE FF  .."3DUfw........
 
 Far Manager
-000000000: 00 00 00 5B 68 65 78 64 ¦ 75 6D 70 5D 00 00 00 00     [hexdump]
-000000010: 00 11 22 33 44 55 66 77 ¦ 88 99 AA BB CC DD EE FF   ?"3DUfw..ª»Ìİîÿ
+000000000: 00 00 00 5B 68 65 78 64 Â¦ 75 6D 70 5D 00 00 00 00     [hexdump]
+000000010: 00 11 22 33 44 55 66 77 Â¦ 88 99 AA BB CC DD EE FF   ?"3DUfw..ÂªÂ»ÃŒÃÃ®Ã¿
 
 
 2. Restore binary data from the formats above as well
@@ -166,7 +166,7 @@ def dumpgen(data):
   for addr, d in enumerate(generator):
     # 00000000:
     line = '%08X: ' % (addr*16)
-    # 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00 
+    # 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00
     dumpstr = dump(d)
     line += dumpstr[:8*3]
     if len(d) > 8:  # insert separator if needed
@@ -189,7 +189,7 @@ def dumpgen(data):
       else:
         line += '.'
     yield line
-  
+
 def hexdump(data, result='print'):
   '''
   Transform binary data to the hex dump text format:
@@ -290,7 +290,7 @@ def runtest(logfile=None):
     savedstd = sys.stderr, sys.stdout
     sys.stderr = TeeOutput(sys.stderr, openlog)
     sys.stdout = TeeOutput(sys.stdout, openlog)
-    
+
 
   def echo(msg, linefeed=True):
     sys.stdout.write(msg)
@@ -344,8 +344,8 @@ def runtest(logfile=None):
 
   far = \
 '''
-000000000: 00 00 00 5B 68 65 78 64 ¦ 75 6D 70 5D 00 00 00 00     [hexdump]
-000000010: 00 11 22 33 44 55 66 77 ¦ 88 99 0A BB CC DD EE FF   ?"3DUfw..ª»Ìİîÿ
+000000000: 00 00 00 5B 68 65 78 64 Â¦ 75 6D 70 5D 00 00 00 00     [hexdump]
+000000010: 00 11 22 33 44 55 66 77 Â¦ 88 99 0A BB CC DD EE FF   ?"3DUfw..ÂªÂ»ÃŒÃÃ®Ã¿
 '''
   echo('restore far format ', linefeed=False)
   assert bin == restore(far), 'far format check failed'
@@ -404,7 +404,7 @@ def main():
     sys.exit(-1)
   else:
     if not options.restore:
-      # [x] memory effective dump 
+      # [x] memory effective dump
       hexdump(open(args[0], 'rb'))
     else:
       # [ ] memory efficient restore

@@ -1,18 +1,19 @@
 {
   "name":"LRIT Files DAEMON",
+  "address": "address",
+  "port": 4001,
   "version":"0.1",
   "verbose": {
-    "tuned_frame":0,
-    "tuned_packet":0
+    "tuned_frame":1,
+    "tuned_packet":1
   },
   "base_directory":"/usr/apps/lrit_files/data",
   "channel":{
-    "0":{
+    "spam0":{
       "files":{
         "214":{
           "directory":"emwin",
           "error_tolerance":"log"
-          "write_headers":0
         }
       }
     },

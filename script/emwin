@@ -1,0 +1,39 @@
+#!/usr/bin/python
+
+import re, sys
+
+sync_header = '\0\0\0\0\0\0\0\0\0\0\0\0/PF'
+
+raw = sys.stdin.read()
+
+start = raw.find( sync_header )
+
+files = {}
+
+def decode_file( file ):
+  tot = int( file['total'] )
+  content = ''
+  for pt in xrange( 1, tot + 1 ):
+    part = str( pt )
+    if part not in file['parts']:              # Missing part, bail
+      return None
+    content += file['parts'][part]
+  return content
+
+while start > 0:
+  desc = raw[start+12:start+92]
+  data = raw[start+92:start+1116]
+  m = re.match( '/PF(.*?)/PN (\d+) */PT (\d+) */CS (\d+) */FD(.*)', desc )
+  if m is not None:
+    ( file, part, tot, id, date ) = m.groups()
+    if file not in files:
+      files[file] = { 'total': tot, 'parts': {} }
+    files[file]['parts'][part] = data
+  start = raw.find( sync_header, start + 1 )
+
+for file in files:
+  content = decode_file( files[file] )
+  if content is not None:
+    fd = open( file, "w" )
+    fd.write( content )
+    fd.close()
