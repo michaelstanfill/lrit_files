@@ -55,12 +55,20 @@ class LRIT:
       self.fd = open( file, 'rb' )
     else:
       self.mode = 'sock'
-      self.sock = socket.socket( socket.AF_INET, socket.SOCK_STREAM )
-      self.sock.connect( ( host, port ) )
+      self.host = host
+      self.port = port
+      self.connect()
+      #self.sock = socket.socket( socket.AF_INET, socket.SOCK_STREAM )
+      #self.sock.connect( ( host, port ) )
     self.buffer = None
 
   def __iter__( self ):
     return self
+
+  def connect( self ):
+      self.sock = socket.socket( socket.AF_INET, socket.SOCK_STREAM )
+      self.sock.connect( ( self.host, self.port ) )
+
 
   def next( self ):
     if self.buffer is None:                    # Initial sync
@@ -99,8 +107,21 @@ class LRIT:
     return i
 
   def read_chunk( self, size ):
+    chunk = ""
     if self.mode == 'file': chunk = self.fd.read( size )
-    else:                   chunk = self.sock.recv( size )
+    else:
+      import select
+      #check that the socket has data
+      ins,outs,errors = select.select( [self.sock,],[],[self.sock],0)
+      if len( ins ) == 1:
+        try:
+	  chunk = self.sock.recv( size )
+	except socket.error, err:
+	  print color('red', "Socket Failed, reconnecting")
+	  self.connect()
+      elif len(errors) > 0:
+        print color('red', "Socket Error has Occured")
+	
     return bytearray( chunk )
 
   #############################################################################
