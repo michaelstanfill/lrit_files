@@ -175,6 +175,7 @@ class LRIT:
       self.data = bytearray()
       self.channel = channel
       self.length = None
+      # compression flag check here
       self.decode_packet( packet )
 
     def decode_packet( self, packet ):
@@ -182,6 +183,8 @@ class LRIT:
         print color( 'blue', 'Ch %d, APID %d: No first packet yet' %
                              ( self.channel, packet.apid ) )
         return
+
+      # add compression checks here
 
       self.data += packet.data
 
