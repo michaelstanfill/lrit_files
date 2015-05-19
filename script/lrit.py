@@ -112,7 +112,7 @@ class LRIT:
     else:
       import select
       #check that the socket has data
-      ins,outs,errors = select.select( [self.sock,],[],[self.sock],0)
+      ins,outs,errors = select.select( [self.sock,],[],[self.sock],.1)
       if len( ins ) == 1:
         try:
 	  chunk = self.sock.recv( size )
