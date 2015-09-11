@@ -212,8 +212,8 @@ class rice_compression_header():
 def get_next_header(data):
 	# get the next header, return that header and the rest of the data
 	type,size = struct.unpack("!BH", buffer(data[0:3]) )
-	print type
-	print size
+	#print type
+	#print size
 	header = None
 	if type == 0:
 		header = primary_header( data[0:size] )
@@ -236,7 +236,8 @@ def get_next_header(data):
 	elif type == 131:
 		header = rice_compression_header( data[0:size] )
 	else:
-		print "Header type %d is not implemented" % type 
+		pass
+		#print "Header type %d is not implemented" % type 
 		
 
 
