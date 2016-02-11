@@ -1,7 +1,7 @@
 #!/usr/bin/python
 
 import re, sys, os, base64
-import time,json
+import time,json,struct
 
 # TODO: need to read from directory and get files in order and b64 decode them first
 
@@ -21,7 +21,7 @@ def decode_file( file ):
 
 def process_packet_files( raw,outdir):
   sync_header = '\0\0\0\0\0\0\0\0\0\0\0\0/PF'
-  sync_header = '/PF'
+  sync_header = '\0\0\0\0\0\0/PF'
   #print raw
   start = raw.find( sync_header )
   #print "starting at %d" % start
@@ -29,19 +29,29 @@ def process_packet_files( raw,outdir):
   while start > 0:
     #desc = raw[start+12:start+92]
     #data = raw[start+92:start+1116]
-    desc = raw[start:start+80]
-    data = raw[start+80:start+1104].replace("\0","")
+    desc = raw[start+6:start+86]
+    data = raw[start+86:start+1110].replace("\0","")
+    print len(raw[start+86:start+1110])
+    _total = 0
+    for d in data:
+    	_total += ord(d)
+    
     #m = re.match( '/PF(.*?)/PN (\d+) */PT (\d+) */CS (\d+) */FD(.*)', desc )
     
     m = re.match( '/PF(.*?)/PN(\d+) */PT(\d+) */CS(\d+) */FD(.*)', desc )
     #print raw[start:start+104]
-    #print desc
-    #print repr(m)
+    print desc
+    print repr(m)
     if m is not None:
-      ( file, part, tot, id, date ) = m.groups()
+      ( file, part, tot, chksum, date ) = m.groups()
+      
       if file not in files:
         files[file] = { 'total': tot, 'parts': {} }
+      print "stated checksum %d  -> calculated checksum %d" % (int(chksum),_total)
+      #if _total == int(chksum):
       files[file]['parts'][part] = data
+      #else:
+      #	print "Checksum didn't match"
     start = raw.find( sync_header, start + 1 )
   #print "writing: %s" % repr(files)
   for file in files:
@@ -75,7 +85,9 @@ if __name__ == '__main__':
 		#print repr(f.split("."))
 		if f.split(".")[1] == "packets":
 			pktfile_names.append(f )
-			pktfiles.append( open(indir+f,"r").read() )
+	pktfile_names.sort()	
+	for f in pktfile_names:
+		pktfiles.append( open(indir+f,"r").read() )
 	#print "Processing %s" % repr(pktfile_names)		
 	raw = ""
 	for pktf in pktfiles:

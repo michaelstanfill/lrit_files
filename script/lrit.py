@@ -255,7 +255,12 @@ class LRIT:
 
     def write_file( self, dir ):
       if not os.path.exists( dir ): os.makedirs( dir )
-      filename = "%s/%d" % ( dir, self.file_counter )
+      timestamp = ""
+      if self.channel == 0: #this is emwin so lets prefix with time to keep the packets in order
+        import datetime
+	dt = datetime.datetime.now()-datetime.datetime(1970,1,1)
+      	timestamp = str(int((dt.days * 24 * 60 * 60 + dt.seconds) * 1000 + dt.microseconds / 1000.0))
+      filename = "%s/%s%d" % ( dir, timestamp,self.file_counter )
       fd = open( filename + ".head", "w" )
       fd.write( buffer( self.data[10:26 + self.header_len - self.record_len] ) )
       fd.close()
