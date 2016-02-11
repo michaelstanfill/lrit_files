@@ -1,14 +1,12 @@
 #!/usr/bin/python
 
-import re, sys
+import re, sys, os, base64
+import time,json
 
-sync_header = '\0\0\0\0\0\0\0\0\0\0\0\0/PF'
+# TODO: need to read from directory and get files in order and b64 decode them first
 
-raw = sys.stdin.read()
+#raw = sys.stdin.read()
 
-start = raw.find( sync_header )
-
-files = {}
 
 def decode_file( file ):
   tot = int( file['total'] )
@@ -20,20 +18,89 @@ def decode_file( file ):
     content += file['parts'][part]
   return content
 
-while start > 0:
-  desc = raw[start+12:start+92]
-  data = raw[start+92:start+1116]
-  m = re.match( '/PF(.*?)/PN (\d+) */PT (\d+) */CS (\d+) */FD(.*)', desc )
-  if m is not None:
-    ( file, part, tot, id, date ) = m.groups()
-    if file not in files:
-      files[file] = { 'total': tot, 'parts': {} }
-    files[file]['parts'][part] = data
-  start = raw.find( sync_header, start + 1 )
 
-for file in files:
-  content = decode_file( files[file] )
-  if content is not None:
-    fd = open( file, "w" )
-    fd.write( content )
-    fd.close()
+def process_packet_files( raw,outdir):
+  sync_header = '\0\0\0\0\0\0\0\0\0\0\0\0/PF'
+  sync_header = '/PF'
+  #print raw
+  start = raw.find( sync_header )
+  #print "starting at %d" % start
+  files = {}
+  while start > 0:
+    #desc = raw[start+12:start+92]
+    #data = raw[start+92:start+1116]
+    desc = raw[start:start+80]
+    data = raw[start+80:start+1104].replace("\0","")
+    #m = re.match( '/PF(.*?)/PN (\d+) */PT (\d+) */CS (\d+) */FD(.*)', desc )
+    
+    m = re.match( '/PF(.*?)/PN(\d+) */PT(\d+) */CS(\d+) */FD(.*)', desc )
+    #print raw[start:start+104]
+    #print desc
+    #print repr(m)
+    if m is not None:
+      ( file, part, tot, id, date ) = m.groups()
+      if file not in files:
+        files[file] = { 'total': tot, 'parts': {} }
+      files[file]['parts'][part] = data
+    start = raw.find( sync_header, start + 1 )
+  #print "writing: %s" % repr(files)
+  for file in files:
+    content = decode_file( files[file] )
+    if content is not None:
+      fd = open( outdir+file, "w" )
+      fd.write( content )
+      fd.close()
+
+def parseArgs():
+  import optparse
+  parser=optparse.OptionParser()
+  parser.add_option('-c', '--config', dest='config', default="/usr/apps/lrit_files/script/config.json", help="JSON config file", metavar="CONFIGFILE")
+  parser.add_option('-f', '--file', dest='filename', default=None, help="File of data to test data from instead of connecting live data.", metavar="DATAFILE" )
+
+  return parser.parse_args()[0] # note, this will need to be changed if anyone wants to add non-named arguments
+
+if __name__ == '__main__':
+  args = parseArgs()
+  config = args.config
+
+  conf = json.loads( ''.join( open( config ).readlines() ) )
+
+  outdir = conf["emwin"]["out"]
+  indir = conf["emwin"]["in"]
+  while True:
+  	files = os.listdir(indir)
+	pktfile_names = []
+	pktfiles = []
+	for f in files:
+		#print repr(f.split("."))
+		if f.split(".")[1] == "packets":
+			pktfile_names.append(f )
+			pktfiles.append( open(indir+f,"r").read() )
+	#print "Processing %s" % repr(pktfile_names)		
+	raw = ""
+	for pktf in pktfiles:
+		pkts = pktf.split("------packet break--------")	
+		for pkt in pkts:
+			raw += base64.b64decode(pkt)
+	print "processing packet data. Have %d bytes" % len(raw)
+	process_packet_files( raw, outdir )
+	
+	for pktfile in pktfile_names:
+		os.unlink( indir+pktfile)
+		#print "removing: %s" % (indir+pktfile)
+	print "Sleeping for 30 seconds"	
+	time.sleep(30)
+
+		
+	
+	
+
+  #scan the emwin directory for .packet files
+  # output files based on regex
+
+	
+
+
+
+
+

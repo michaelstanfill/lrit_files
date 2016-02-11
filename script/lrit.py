@@ -5,7 +5,7 @@ import base64
 from hexdump import hexdump
 
 from rs import reedsolomon
-from image import get_next_header
+#from image import get_next_header
 
 crc_table = [ 0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50A5, 0x60C6, 0x70E7,
               0x8108, 0x9129, 0xA14A, 0xB16B, 0xC18C, 0xD1AD, 0xE1CE, 0xF1EF,
@@ -249,6 +249,7 @@ class LRIT:
           self.write_file( dir )
 
         self.data = bytearray()
+	self.packets = []
         self.length = None
         self.file_type = None
 
@@ -258,14 +259,15 @@ class LRIT:
       fd = open( filename + ".head", "w" )
       fd.write( buffer( self.data[10:26 + self.header_len - self.record_len] ) )
       fd.close()
-      fd = open( filename, "w" )
-      fd.write( buffer( self.data[26 + self.header_len - self.record_len:] ) )
-      fd.close()
+      #fd = open( filename, "w" )
+      #fd.write( buffer( self.data[26 + self.header_len - self.record_len:] ) )
+      #fd.close()
       i = 0
       fd = open( filename +".packets", "w" )
       for p in self._packets:
         fd.write( base64.b64encode(buffer(p)) +"\n")
 	fd.write( "------packet break--------\n")
+	i = i+1
       fd.close()
          
   #############################################################################
