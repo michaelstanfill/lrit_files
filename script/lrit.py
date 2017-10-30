@@ -1,10 +1,11 @@
 #!/usr/local/bin/python
 
 import json, os, re, socket, struct, sys
-
+import base64
 from hexdump import hexdump
 
 from rs import reedsolomon
+#from image import get_next_header
 
 crc_table = [ 0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50A5, 0x60C6, 0x70E7,
               0x8108, 0x9129, 0xA14A, 0xB16B, 0xC18C, 0xD1AD, 0xE1CE, 0xF1EF,
@@ -55,12 +56,23 @@ class LRIT:
       self.fd = open( file, 'rb' )
     else:
       self.mode = 'sock'
-      self.sock = socket.socket( socket.AF_INET, socket.SOCK_STREAM )
-      self.sock.connect( ( host, port ) )
+      self.host = host
+      self.port = port
+      self.connect()
+      #self.sock = socket.socket( socket.AF_INET, socket.SOCK_STREAM )
+      #self.sock.connect( ( host, port ) )
     self.buffer = None
+    self.nodata_counter = 0
 
   def __iter__( self ):
     return self
+
+  def connect( self ):
+      self.nodata_counter = 0
+      self.sock = socket.socket( socket.AF_INET, socket.SOCK_STREAM )
+      self.sock.connect( ( self.host, self.port ) )
+      self.sock.setblocking(0)
+
 
   def next( self ):
     if self.buffer is None:                    # Initial sync
@@ -99,8 +111,32 @@ class LRIT:
     return i
 
   def read_chunk( self, size ):
+    chunk = ""
     if self.mode == 'file': chunk = self.fd.read( size )
-    else:                   chunk = self.sock.recv( size )
+    else:
+      import select
+      #check that the socket has data
+      ins,outs,errors = select.select( [self.sock,],[],[self.sock],.1)
+      if len( ins ) == 1:
+        try:
+	  chunk = self.sock.recv( size )
+	  self.nodata_counter = self.nodata_counter - 1
+	  if self.nodata_counter < 0:
+	  	self.nodata_counter = 0
+	except socket.error, err:
+	  print color('red', "Socket Failed, reconnecting: %s: %s"% (repr(err),str(err)) )
+	  self.sock.close()
+	  self.connect()
+      elif len(errors) > 0:
+        print color('red', "Socket Error has Occured")
+      else:
+        self.nodata_counter = self.nodata_counter + 1
+        print color('yellow', "No data available")
+	if self.nodata_counter > 5:
+		print color('yellow', " Restarting Connection" )
+		self.sock.close()
+		self.connect()
+	
     return bytearray( chunk )
 
   #############################################################################
@@ -152,17 +188,33 @@ class LRIT:
   class transport_file:
     def __init__( self, channel, packet ):
       self.data = bytearray()
+      self._packets = [] # individual packets for reconstruction
       self.channel = channel
       self.length = None
+      # compression flag check here
       self.decode_packet( packet )
-
+      self.image_info = [] # if this is an image, we need to stor at least the rice/other compression header
+      self.is_image = False # if image, alter the way we do things a bit
     def decode_packet( self, packet ):
       if len( self.data ) == 0 and not packet.seq_first:
         print color( 'blue', 'Ch %d, APID %d: No first packet yet' %
                              ( self.channel, packet.apid ) )
         return
 
+      if packet.seq_first:
+        # see how many headers we can get, set an additional variable if we don't have full headers yet
+	# if we find the rice header, set it aside. 
+	# if there is data after the headers, decompress
+	#   (and hope there isn't another rediculous boundary/encapsulation layer involved.)
+        pass
+      # add compression checks here
+
+      #if isImage
+         #decompress packet data first
+      #else:
       self.data += packet.data
+      self._packets.append( packet.data )
+      
 
       if self.length is None and len( packet.data ) >= 10:
         ( self.file_counter, self.length ) = struct.unpack( "!HQ",
@@ -197,19 +249,32 @@ class LRIT:
           self.write_file( dir )
 
         self.data = bytearray()
+	self.packets = []
         self.length = None
         self.file_type = None
 
     def write_file( self, dir ):
       if not os.path.exists( dir ): os.makedirs( dir )
-      filename = "%s/%d" % ( dir, self.file_counter )
+      timestamp = ""
+      if self.channel == 0: #this is emwin so lets prefix with time to keep the packets in order
+        import datetime
+	dt = datetime.datetime.now()-datetime.datetime(1970,1,1)
+      	timestamp = str(int((dt.days * 24 * 60 * 60 + dt.seconds) * 1000 + dt.microseconds / 1000.0))
+      filename = "%s/%s%d" % ( dir, timestamp,self.file_counter )
       fd = open( filename + ".head", "w" )
       fd.write( buffer( self.data[10:26 + self.header_len - self.record_len] ) )
       fd.close()
-      fd = open( filename, "w" )
-      fd.write( buffer( self.data[26 + self.header_len - self.record_len:] ) )
+      #fd = open( filename, "w" )
+      #fd.write( buffer( self.data[26 + self.header_len - self.record_len:] ) )
+      #fd.close()
+      i = 0
+      fd = open( filename +".packets", "w" )
+      for p in self._packets:
+        fd.write( base64.b64encode(buffer(p)) +"\n")
+	fd.write( "------packet break--------\n")
+	i = i+1
       fd.close()
-
+         
   #############################################################################
 
   class packet:

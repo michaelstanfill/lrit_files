@@ -8,6 +8,11 @@
     "tuned_packet":1
   },
   "base_directory":"/usr/apps/lrit_files/data",
+  "emwin":{
+        "in": "/netapp/l2eddman/lrit_files/data/emwin/",
+        "out": "/netapp/l2eddman/emwin_files/",
+        "regex": [".*TXT",".*ZIS"]
+  },
   "channel":{
     "spam0":{
       "files":{
